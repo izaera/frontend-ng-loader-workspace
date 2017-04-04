@@ -5,6 +5,7 @@ import java.net.URL;
 import java.util.List;
 
 import com.github.yuchi.semver.Version;
+import com.liferay.portal.kernel.util.CharPool;
 import com.liferay.portal.kernel.util.PortalUtil;
 import com.liferay.portal.kernel.util.StringBundler;
 import com.liferay.portal.kernel.util.StringPool;
@@ -18,6 +19,11 @@ public class PackageConfig {
 		String main, List<PackageDependency> dependencies,
 		List<ModuleAlias> moduleAliases, String servletPackagePath,
 		PackagesBundleConfig pkgsBundleConfig) {
+
+		if (servletPackagePath.endsWith(StringPool.SLASH)) {
+			servletPackagePath = servletPackagePath.substring(
+				0, servletPackagePath.length()-1);
+		}
 
 		_name = name;
 		_version = Version.from(version, true);
@@ -109,6 +115,11 @@ public class PackageConfig {
 
 	public Version getVersion() {
 		return _version;
+	}
+
+	@Override
+	public String toString() {
+		return _name + "@" + _version;
 	}
 
 	private String _servletPackagePath;

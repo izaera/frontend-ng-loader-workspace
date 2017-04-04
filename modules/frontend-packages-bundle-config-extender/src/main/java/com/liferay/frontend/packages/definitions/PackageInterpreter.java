@@ -1,5 +1,8 @@
 package com.liferay.frontend.packages.definitions;
 
+import org.osgi.framework.Bundle;
+import org.osgi.framework.ServiceReference;
+
 import java.net.URL;
 import java.util.Optional;
 
@@ -10,6 +13,6 @@ public interface PackageInterpreter {
 	public String getType();
 
 	public Optional<PackagesBundleConfig> interpret(
-		ServletContext servletContext, String location);
+		ServiceReference<ServletContext> serviceReference);
 
 }

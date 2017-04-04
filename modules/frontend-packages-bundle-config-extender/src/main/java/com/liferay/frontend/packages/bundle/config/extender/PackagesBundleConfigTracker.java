@@ -66,26 +66,15 @@ public class PackagesBundleConfigTracker
 	public ServiceReference<ServletContext> addingService(
 		ServiceReference<ServletContext> serviceReference) {
 
-		Bundle bundle = serviceReference.getBundle();
+		for (PackageInterpreter interpreter : _interpreters) {
+			Optional<PackagesBundleConfig> pkgsBundleConfig =
+				interpreter.interpret(serviceReference);
 
-		Dictionary<String, String> headers = bundle.getHeaders();
+			if (pkgsBundleConfig.isPresent()) {
+				_pkgsBundleConfigs.put(
+					serviceReference, pkgsBundleConfig.get());
 
-		String pkgsConfig = headers.get("Liferay-Package-Config");
-
-		ServletContext servletContext = _bundleContext.getService(
-			serviceReference);
-
-		if (pkgsConfig != null) {
-			for (PackageInterpreter interpreter : _interpreters) {
-				Optional<PackagesBundleConfig> pkgsBundleConfig =
-					interpreter.interpret(servletContext, pkgsConfig);
-
-				if (pkgsBundleConfig.isPresent()) {
-					_pkgsBundleConfigs.put(
-						serviceReference, pkgsBundleConfig.get());
-
-					return serviceReference;
-				}
+				return serviceReference;
 			}
 		}
 

@@ -1,26 +1,5 @@
 package com.liferay.frontend.packages.definitions.npm;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Dictionary;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
-import javax.servlet.ServletContext;
-
-import org.apache.felix.utils.log.Logger;
-import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleContext;
-import org.osgi.framework.ServiceReference;
-import org.osgi.service.component.ComponentContext;
-import org.osgi.service.component.annotations.Activate;
-import org.osgi.service.component.annotations.Component;
-import org.osgi.service.component.annotations.Modified;
-
 import com.liferay.frontend.packages.definitions.ModuleAlias;
 import com.liferay.frontend.packages.definitions.PackageConfig;
 import com.liferay.frontend.packages.definitions.PackageDependency;
@@ -33,15 +12,31 @@ import com.liferay.portal.kernel.json.JSONObject;
 import com.liferay.portal.kernel.util.CharPool;
 import com.liferay.portal.kernel.util.GetterUtil;
 import com.liferay.portal.kernel.util.StringBundler;
+import com.liferay.portal.kernel.util.StringPool;
 import com.liferay.portal.kernel.util.StringUtil;
 import com.liferay.portal.kernel.util.Validator;
+import org.apache.felix.utils.log.Logger;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.ServiceReference;
+import org.osgi.service.component.ComponentContext;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Modified;
 
-/**
- * This PackageInterpreter does not work correctly with deep recursive
- * dependencies because it gets confused with paths.
- */
-//@Component(immediate = true, service = PackageInterpreter.class)
-public class NPMPackageInterpreter implements PackageInterpreter {
+import javax.servlet.ServletContext;
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Component(immediate = true, service = PackageInterpreter.class)
+public class FlatNPMPackageInterpreter implements PackageInterpreter {
 
 	public static final String BROWSER = "browser";
 	public static final String DEPENDENCIES = "dependencies";
@@ -50,7 +45,7 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 	public static final String NAME = "name";
 	public static final String MAIN = "main";
 	public static final String PACKAGES = "packages";
-	public static final String TYPE = "npm";
+	public static final String TYPE = "npm-flat";
 	public static final String VERSION = "version";
 
 	@Activate
@@ -73,34 +68,41 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 	public Optional<PackagesBundleConfig> interpret(
 		ServiceReference<ServletContext> serviceReference) {
 
+		return Optional.ofNullable(doInterpret(serviceReference));
+	}
+
+	protected PackagesBundleConfig doInterpret(
+		ServiceReference<ServletContext> serviceReference) {
+
 		Bundle bundle = serviceReference.getBundle();
-
-		Dictionary<String, String> headers = bundle.getHeaders();
-
-		String pkgsConfig = headers.get("Liferay-Package-Config");
 
 		ServletContext servletContext = _bundleContext.getService(
 			serviceReference);
 
-		PackagesBundleConfig packagesBundleConfig = null;
-
-		if (pkgsConfig != null) {
-			packagesBundleConfig = doInterpret(servletContext, pkgsConfig);
-		}
-
-		return Optional.ofNullable(packagesBundleConfig);
-	}
-
-	protected PackagesBundleConfig doInterpret(
-		ServletContext servletContext, String location) {
-
 		try {
-			PackagesBundleConfig pkgsBundleConfig = new PackagesBundleConfig(
-				servletContext);
+			PackagesBundleConfig packagesBundleConfig =
+				new PackagesBundleConfig(servletContext);
 
-			parsePackage(servletContext, pkgsBundleConfig, location);
+			PackageConfig packageConfig = parsePackage(
+				bundle, "/META-INF/resources", packagesBundleConfig);
 
-			return pkgsBundleConfig;
+			packagesBundleConfig.addPackageConfig(packageConfig);
+			System.err.println("==========> "+packageConfig);
+
+			Enumeration<URL> urls = bundle.findEntries(
+				"/META-INF/resources/node_modules", "*", false);
+
+			while(urls.hasMoreElements()) {
+				URL url = urls.nextElement();
+
+				packageConfig = parsePackage(
+					bundle, url.getPath(), packagesBundleConfig);
+
+				packagesBundleConfig.addPackageConfig(packageConfig);
+				System.err.println("==========> "+packageConfig);
+			}
+
+			return packagesBundleConfig;
 		}
 		catch (InvalidPackageException ipe) {
 			return null;
@@ -108,20 +110,19 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 	}
 
 	protected PackageConfig parsePackage(
-			ServletContext servletContext,
-			PackagesBundleConfig pkgsBundleConfig, String location)
+			Bundle bundle, String location,
+			PackagesBundleConfig packagesBundleConfig)
 		throws InvalidPackageException {
 
-		System.err.println(_indent + "=======> parsePackage: "+location);
-
-		if (!location.endsWith("/package.json")) {
-			throw new InvalidPackageException();
+		if (!location.endsWith(StringPool.SLASH)) {
+			location += StringPool.SLASH;
 		}
 
-		JSONObject jsonObject = _read(servletContext, location);
+		JSONObject jsonObject = _readPackageJson(
+			bundle, location + "package.json");
 
 		if (jsonObject == null) {
-			return null;
+			throw new InvalidPackageException(location);
 		}
 
 		String name = jsonObject.getString(NAME);
@@ -133,12 +134,11 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 		List<PackageDependency> dependencies =
 			new ArrayList<PackageDependency>();
 
-		dependencies.addAll(parsePackageDependencies(
-			pkgsBundleConfig, location, jsonObject, DEPENDENCIES));
-		dependencies.addAll(parsePackageDependencies(
-			pkgsBundleConfig, location, jsonObject, DEPENDENCIES_OPTIONAL));
-		dependencies.addAll(parsePackageDependencies(
-			pkgsBundleConfig, location, jsonObject, DEPENDENCIES_PEER));
+		dependencies.addAll(parsePackageDependencies(jsonObject, DEPENDENCIES));
+		dependencies.addAll(
+			parsePackageDependencies(jsonObject, DEPENDENCIES_OPTIONAL));
+		dependencies.addAll(
+			parsePackageDependencies(jsonObject, DEPENDENCIES_PEER));
 
 		List<ModuleAlias> moduleAliases = new ArrayList<ModuleAlias>();
 
@@ -181,67 +181,18 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 			}
 		}
 
-		String dirLocation = location.substring(0, location.length() - 13);
-
-		String servletPackagePath = dirLocation;
+		String servletPackagePath = location;
 
 		if (servletPackagePath.startsWith("/META-INF/resources")) {
 			servletPackagePath = servletPackagePath.substring(19);
 		}
 
-		PackageConfig pkgConfig = new PackageConfig(
+		return new PackageConfig(
 			name, pkgIdentifier, version, main, dependencies, moduleAliases,
-			servletPackagePath, pkgsBundleConfig);
-
-		pkgsBundleConfig.addPackageConfig(pkgConfig);
-
-		System.err.println(_indent+"=======> addPackageConfig: "+name+"@"+version+" -> "+servletPackagePath);
-		for (PackageDependency dependency : dependencies) {
-			System.err.println(_indent+"=======> dep: "+dependency.getName());
-		}
-		_indent += "  ";
-
-		for (PackageDependency dependency : dependencies) {
-			PackageConfig found = null;
-
-			while (true) {
-				StringBundler sb = new StringBundler();
-
-				sb.append(dirLocation);
-				sb.append("/node_modules/");
-				sb.append(dependency.getName());
-				sb.append("/package.json");
-
-				String dependencyLocation = sb.toString();
-
-				found = parsePackage(
-					servletContext, pkgsBundleConfig, dependencyLocation);
-
-				if (found != null) {
-					break;
-				}
-
-				int pos = dirLocation.lastIndexOf(CharPool.SLASH);
-
-				if (pos < 0) {
-					break;
-				}
-
-				dirLocation = dirLocation.substring(0, pos);
-
-				if (Validator.isNull(dirLocation)) {
-					break;
-				}
-			}
-		}
-
-		_indent = _indent.substring(0, _indent.length()-2);
-
-		return pkgConfig;
+			servletPackagePath, packagesBundleConfig);
 	}
 
 	protected List<PackageDependency> parsePackageDependencies(
-		PackagesBundleConfig pkgsBundleConfig, String location,
 		JSONObject jsonObject, String property) {
 
 		List<PackageDependency> dependencies =
@@ -265,6 +216,7 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 		return dependencies;
 	}
 
+	/*
 	private static JSONObject _read(
 		ServletContext servletContext, String location) {
 
@@ -291,9 +243,39 @@ public class NPMPackageInterpreter implements PackageInterpreter {
 			return null;
 		}
 	}
+	*/
+
+	private static JSONObject _readPackageJson(Bundle bundle, String location) {
+		try {
+			URL url = bundle.getResource(location);
+
+			if (url == null) {
+				return null;
+			}
+
+			String json = StringUtil.read(url.openStream());
+
+			JSONObject jsonObject = JSONFactoryUtil.createJSONObject(json);
+
+			return jsonObject;
+		}
+		catch (MalformedURLException murle) {
+			return null;
+		}
+		catch (IOException ioe) {
+			return null;
+		}
+		catch (JSONException jsone) {
+			return null;
+		}
+	}
 
 	private static class InvalidPackageException extends Exception {
 		private static final long serialVersionUID = 123233863902880765L;
+
+		public InvalidPackageException(String location) {
+			super(location);
+		}
 	}
 
 	private BundleContext _bundleContext;
